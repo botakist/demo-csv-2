@@ -6,7 +6,6 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.ToString;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Getter
@@ -19,9 +18,4 @@ public class GameSalesParamsEntity {
     private LocalDateTime to;
     private Double minPrice;
     private Double maxPrice;
-
-
-    public boolean isEmpty() {
-        return from == null && to == null && minPrice == null && maxPrice == null;
-    }
 }

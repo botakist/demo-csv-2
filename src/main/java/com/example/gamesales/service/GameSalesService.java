@@ -5,8 +5,11 @@ import com.example.gamesales.entity.GameSalesParamsEntity;
 import com.example.gamesales.entity.TotalSalesParamsEntity;
 import com.example.gamesales.exception.ValidationException;
 import com.example.gamesales.repository.GameSalesRepository;
+import com.example.gamesales.repository.ImportLogRepository;
 import com.example.gamesales.util.GameSalesUtil;
 import com.example.gamesales.view.GameSalesView;
+import com.example.gamesales.view.ImportLogView;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -15,30 +18,28 @@ import org.apache.commons.io.LineIterator;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.compare.ComparableUtils;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.transaction.Transactional;
 import java.io.IOException;
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
 import java.text.MessageFormat;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 @Service
@@ -46,63 +47,97 @@ import java.util.stream.Collectors;
 public class GameSalesService {
     private static final ObjectMapper mapper = new ObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     private final GameSalesRepository gameSalesRepository;
+    private final ImportLogRepository importLogRepository;
 
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
+    private final JdbcTemplate jdbcTemplate;
 
     @Value("${com.example.gamesales.import.threadpoolsize:20}")
     private int threadPoolSize;
 
-    private static final int batchSize = 10000;
+    @Value("${spring.jpa.properties.hibernate.jdbc.batch_size:10000}")
+    private int batchSize;
 
-    public GameSalesService(GameSalesRepository gameSalesRepository) {
+    public GameSalesService(GameSalesRepository gameSalesRepository, ImportLogRepository importLogRepository, JdbcTemplate jdbcTemplate) {
         this.gameSalesRepository = gameSalesRepository;
+        this.importLogRepository = importLogRepository;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
-    public String validateCsvFile(MultipartFile csvFile) {
+    public int validateCsvFile(MultipartFile csvFile) {
         if (Objects.isNull(csvFile) || csvFile.isEmpty()) {
-            return "file is empty";
+            logAndThrowValidationException("csv file is empty.");
+
+        }
+        if (!StringUtils.endsWithIgnoreCase(csvFile.getOriginalFilename(), ".csv")) {
+            logAndThrowValidationException("file input extension is not .csv");
         }
 
-        if (!StringUtils.endsWithIgnoreCase(csvFile.getOriginalFilename(), ".csv")) {
-            return "input file is not a .csv file";
+        int totalRecordsCount = 0;
+        try {
+            totalRecordsCount = GameSalesUtil.getTotalRecordsInside(csvFile);
+            if (totalRecordsCount <= 0) {
+                logAndThrowValidationException("csv file contains 0 records");
+            }
+        } catch (IOException e) {
+            log.error(e.getMessage(), e);
+            logAndThrowValidationException("error when getting total records count in csv file.");
         }
-        return null;
+        return totalRecordsCount;
     }
 
-    @Transactional
-    public void save(MultipartFile csvFile) {
+    public void save(MultipartFile csvFile, int totalRecordsCount) {
         List<GameSalesView> gameSalesViews = new ArrayList<>();
         ExecutorService executorService = Executors.newFixedThreadPool(threadPoolSize);
+
+        ImportLogView importLogView = new ImportLogView();
+        importLogView.setTotalRecordsCount(totalRecordsCount);
+        importLogView.setStartTime(LocalDateTime.now());
+        importLogView.setTotalProcessedRecordsCount(0);
+        importLogView.setInvalidRecordsCount(0);
+        importLogView.setStatus("IN_PROGRESS");
+        importLogRepository.save(importLogView);
+
+        AtomicInteger validRecordsCount = new AtomicInteger();
+        AtomicInteger invalidRecordsCount = new AtomicInteger();
+
         try (LineIterator it = FileUtils.lineIterator(GameSalesUtil.multipartToFile(csvFile), "UTF-8")) {
+            // skip csv file header line
             if (it.hasNext()) {
                 it.next();
             }
+
             while (it.hasNext()) {
                 String line = it.nextLine();
                 line = line.replace("\"", "");
                 String[] fields = line.split(",");
-                GameSalesView view = new GameSalesView();
-                view.setId(Long.parseLong(fields[0]));
-                view.setGameNo(Integer.parseInt(fields[1]));
-                view.setGameName(fields[2]);
-                view.setGameCode(fields[3]);
-                view.setType(Integer.parseInt(fields[4]));
-                view.setCostPrice(Double.parseDouble(fields[5]));
-                view.setTax(Double.parseDouble(fields[6]));
-                view.setSalePrice(Double.parseDouble(fields[7]));
-                view.setDateOfSale(LocalDateTime.parse(fields[8],  DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS")));
-                gameSalesViews.add(view);
+                try {
+                    gameSalesViews.add(parseCsvLineToGameSalesView(fields));
 
-                if (gameSalesViews.size() <= batchSize) {
+                } catch (NullPointerException | NumberFormatException | DateTimeParseException e) {
+                    invalidRecordsCount.getAndIncrement();
+                    importLogView.setInvalidRecordsCount(invalidRecordsCount.get());
+                    updateImportLog(importLogView);
+                    continue;
+                }
+
+                if (gameSalesViews.size() >= batchSize) {
                     List<GameSalesView> batch = new ArrayList<>(gameSalesViews);
-                    executorService.submit(() -> batchInsert(batch));
+                    executorService.submit(() -> validateAndBatchInsert(batch, invalidRecordsCount, validRecordsCount));
+                    importLogView.setTotalProcessedRecordsCount(validRecordsCount.get());
+                    importLogView.setInvalidRecordsCount(invalidRecordsCount.get());
+                    updateImportLog(importLogView);
                     gameSalesViews.clear();
                 }
             }
             if (!gameSalesViews.isEmpty()) {
-                executorService.submit(() -> batchInsert(gameSalesViews));
+                executorService.submit(() -> validateAndBatchInsert(gameSalesViews, invalidRecordsCount, validRecordsCount));
+                importLogView.setTotalProcessedRecordsCount(validRecordsCount.get());
+                importLogView.setInvalidRecordsCount(invalidRecordsCount.get());
+                updateImportLog(importLogView);
             }
+            importLogView.setStatus("COMPLETED");
+            importLogView.setEndTime(LocalDateTime.now());
+            updateImportLog(importLogView);
         } catch (IOException e) {
             log.error(e.getMessage(), e);
         } finally {
@@ -110,33 +145,79 @@ public class GameSalesService {
         }
     }
 
+
+    private void validateAndBatchInsert(List<GameSalesView> unvalidatedBatch, AtomicInteger invalidRecordsCount, AtomicInteger validRecordsCount) {
+        List<GameSalesView> validatedBatch = new ArrayList<>();
+
+        for (GameSalesView view : unvalidatedBatch) {
+            if (isValidData(view)) {
+                validatedBatch.add(view);
+                validRecordsCount.getAndIncrement();
+            } else {
+                invalidRecordsCount.getAndIncrement();
+            }
+        }
+        log.info(Thread.currentThread().getName());
+        batchInsert(validatedBatch);
+    }
+
+    private boolean isValidData(GameSalesView view) {
+        boolean id = view.getId() != null && view.getId() > 0;
+        boolean gameNo = view.getGameNo() > 0;
+        boolean gameName = StringUtils.isNotBlank(view.getGameName()) && view.getGameName().length() <= 20;
+        boolean gameCode = StringUtils.isNotBlank(view.getGameCode()) && view.getGameCode().length() <= 5;
+        boolean type = view.getType() == 1 || view.getType() == 2;
+        boolean costPrice = view.getCostPrice() >= 0 && view.getCostPrice() <= 100;
+        boolean tax = view.getTax() >= 0;
+        boolean salePrice = view.getSalePrice() >= 0 && (view.getSalePrice() == (view.getCostPrice() + view.getCostPrice() * view.getTax()));
+        boolean dateOfSale = view.getDateOfSale() != null;
+        return id && gameNo && gameName && gameCode && type && costPrice && tax && salePrice && dateOfSale;
+    }
+
+    private GameSalesView parseCsvLineToGameSalesView(String[] fields) throws NullPointerException, NumberFormatException, DateTimeParseException {
+        GameSalesView view = new GameSalesView();
+        view.setId(Long.parseLong(fields[0]));
+        view.setGameNo(Integer.parseInt(fields[1]));
+        view.setGameName(fields[2]);
+        view.setGameCode(fields[3]);
+        view.setType(Integer.parseInt(fields[4]));
+        view.setCostPrice(Double.parseDouble(fields[5]));
+        view.setTax(Double.parseDouble(fields[6]));
+        view.setSalePrice(Double.parseDouble(fields[7]));
+        view.setDateOfSale(LocalDateTime.parse(fields[8], DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS")));
+        return view;
+    }
+
     public GameSalesParamsEntity validateGetGameSalesRequest(String params, String sortField, String sortDir) {
-        GameSalesParamsEntity gameSalesParamsEntity = new GameSalesParamsEntity();
-        validateParamsNotEmpty(params);
-        try {
-            gameSalesParamsEntity = mapper.readValue(params, GameSalesParamsEntity.class);
-        } catch (IOException e) {
-            log.error(e.getMessage(), e);
-            throw new ValidationException("params mapping error encountered, contact admin.");
+        GameSalesParamsEntity gameSalesParamsEntity = null;
+        if (StringUtils.isNotBlank(params)) {
+            try {
+                gameSalesParamsEntity = mapper.readValue(params, GameSalesParamsEntity.class);
+            } catch (JsonProcessingException e) {
+                log.error(e.getMessage(), e);
+                throw new ValidationException(GameSalesConstants.PARAMS_MAPPING_ERROR_ENCOUNTERED_CONTACT_ADMIN);
+            }
+            if (ObjectUtils.isEmpty(gameSalesParamsEntity)) {
+                log.error("gameSalesParamsEntity is null");
+                throw new ValidationException(GameSalesConstants.PARAMS_MAPPING_ERROR_ENCOUNTERED_CONTACT_ADMIN);
+            }
+            validateFromDateCannotBeAfterToDateNonMandatory(gameSalesParamsEntity.getFrom(), gameSalesParamsEntity.getTo());
+            validateMinPriceMaxPriceNonMandatory(gameSalesParamsEntity.getMinPrice(), gameSalesParamsEntity.getMaxPrice());
         }
-        if (gameSalesParamsEntity == null) {
-            log.error("gameSalesParamsEntity is null");
-        }
-        validateFromAndToDates(gameSalesParamsEntity.getFrom(), gameSalesParamsEntity.getTo());
-        validateMinAndMaxPrice(gameSalesParamsEntity.getMinPrice(), gameSalesParamsEntity.getMaxPrice());
+        validateValidSortFields(sortField);
+        validateValidSortDirection(sortDir);
 
         return gameSalesParamsEntity;
     }
-
 
     public TotalSalesParamsEntity validateTotalSalesRequest(String params) {
         TotalSalesParamsEntity totalSalesParamsEntity;
         validateParamsNotEmpty(params);
         try {
             totalSalesParamsEntity = mapper.readValue(params, TotalSalesParamsEntity.class);
-        } catch (IOException e) {
+        } catch (JsonProcessingException e) {
             log.error(e.getMessage(), e);
-            throw new ValidationException("params mapping error encountered, contact admin.");
+            throw new ValidationException(GameSalesConstants.PARAMS_MAPPING_ERROR_ENCOUNTERED_CONTACT_ADMIN);
         }
 
         if (ObjectUtils.anyNull(totalSalesParamsEntity, totalSalesParamsEntity.getFrom(), totalSalesParamsEntity.getTo())) {
@@ -144,13 +225,13 @@ public class GameSalesService {
             log.error(mandatoryParamsEmpty);
             throw new ValidationException(mandatoryParamsEmpty);
         }
-        validateFromAndToDates(totalSalesParamsEntity.getFrom(), totalSalesParamsEntity.getTo());
+        validateFromDateCannotBeAfterToDateNonMandatory(totalSalesParamsEntity.getFrom(), totalSalesParamsEntity.getTo());
         validateCategoryAndGameNo(totalSalesParamsEntity.getCategory(), totalSalesParamsEntity.getGameNo());
         return totalSalesParamsEntity;
     }
 
 
-    public Page<GameSalesView> getGameSalesWith(GameSalesParamsEntity gameSalesParamsEntity, String sortField, String sortDir, Pageable pageable) {
+    public Page<GameSalesView> getGameSalesPageWith(GameSalesParamsEntity gameSalesParamsEntity, String sortField, String sortDir, Pageable pageable) {
         if (StringUtils.isNotBlank(sortField)) {
             if (GameSalesConstants.SORT_DIR_DESC.equals(sortDir)) {
                 pageable = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(sortField).descending());
@@ -170,30 +251,32 @@ public class GameSalesService {
         StringBuilder sql = new StringBuilder("SELECT * FROM game_sales WHERE 1=1");
         // List to hold the sql query parameters
         List<Object> params = new ArrayList<>();
-        if (gameSalesParamsEntity.getFrom() != null) {
-            sql.append(" AND date_of_sale >= ?");
-            params.add(gameSalesParamsEntity.getFrom());
-        }
+        if (gameSalesParamsEntity != null) {
+            if (gameSalesParamsEntity.getFrom() != null) {
+                sql.append(" AND date_of_sale >= ?");
+                params.add(gameSalesParamsEntity.getFrom());
+            }
 
-        if (gameSalesParamsEntity.getTo() != null) {
-            sql.append(" AND date_of_sale <= ?");
-            params.add(gameSalesParamsEntity.getTo());
-        }
+            if (gameSalesParamsEntity.getTo() != null) {
+                sql.append(" AND date_of_sale <= ?");
+                params.add(gameSalesParamsEntity.getTo());
+            }
 
-        if (gameSalesParamsEntity.getMinPrice() != null) {
-            sql.append(" AND sale_price >= ?");
-            params.add(gameSalesParamsEntity.getMinPrice());
-        }
+            if (gameSalesParamsEntity.getMinPrice() != null) {
+                sql.append(" AND sale_price >= ?");
+                params.add(gameSalesParamsEntity.getMinPrice());
+            }
 
-        if (gameSalesParamsEntity.getMaxPrice() != null) {
-            sql.append(" AND sale_price <= ?");
-            params.add(gameSalesParamsEntity.getMaxPrice());
+            if (gameSalesParamsEntity.getMaxPrice() != null) {
+                sql.append(" AND sale_price <= ?");
+                params.add(gameSalesParamsEntity.getMaxPrice());
+            }
         }
 
         if (StringUtils.isNotBlank(sortField)) {
             sql.append(" ORDER BY ").append(sortField);
         } else {
-            sql.append(" ORDER BY date_of_sale");
+            sql.append(" ORDER BY ").append(GameSalesConstants.DATE_OF_SALE_COLUMN_NAME);
         }
 
         if (StringUtils.equalsIgnoreCase(GameSalesConstants.SORT_DIR_DESC, sortDirection)) {
@@ -244,6 +327,24 @@ public class GameSalesService {
         }
     }
 
+    public void batchInsert(List<GameSalesView> views) {
+        String sql = "INSERT INTO game_sales (id, game_no, game_name, game_code, type, cost_price, tax, sale_price, date_of_sale) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        List<Object[]> batchArgs = views.stream()
+                .map(view -> new Object[]{
+                        view.getId(),
+                        view.getGameNo(),
+                        view.getGameName(),
+                        view.getGameCode(),
+                        view.getType(),
+                        view.getCostPrice(),
+                        view.getTax(),
+                        view.getSalePrice(),
+                        view.getDateOfSale()
+                })
+                .collect(Collectors.toList());
+        jdbcTemplate.batchUpdate(sql, batchArgs);
+    }
+
     public HashMap<String, Object> getTotalSalesWith(TotalSalesParamsEntity totalSalesParamsEntity) {
         HashMap<String, Object> response = new HashMap<>();
         if (totalSalesParamsEntity.getFrom() != null) {
@@ -272,50 +373,85 @@ public class GameSalesService {
         return response;
     }
 
-    public void validateFromAndToDates(LocalDateTime from, LocalDateTime to) {
+    public void validateFromDateCannotBeAfterToDateNonMandatory(LocalDateTime from, LocalDateTime to) {
         if (ObjectUtils.allNotNull(from, to) && from.isAfter(to)) {
             String fromDateIsAfterToDate = MessageFormat.format("From:{0} cannot be after To:{1}", from, to);
-            log.error(fromDateIsAfterToDate);
-            throw new ValidationException(fromDateIsAfterToDate);
+            logAndThrowValidationException(fromDateIsAfterToDate);
         }
     }
 
-    public void validateMinAndMaxPrice(Double minPrice, Double maxPrice) {
+    public void validateMinPriceMaxPriceNonMandatory(Double minPrice, Double maxPrice) {
+        if ((minPrice != null && ComparableUtils.is(minPrice).lessThan(0.0))) {
+            String invalidMinPrice = MessageFormat.format("Invalid param minPrice:{0}, minPrice cannot be null or less than 0.0", minPrice);
+            logAndThrowValidationException(invalidMinPrice);
+        }
+        if ((maxPrice != null && ComparableUtils.is(maxPrice).lessThan(0.0))) {
+            String invalidMaxPrice = MessageFormat.format("Invalid param maxPrice:{0}, maxPrice cannot be null or less than 0.0", maxPrice);
+            logAndThrowValidationException(invalidMaxPrice);
+        }
+
         if (ObjectUtils.allNotNull(minPrice, maxPrice) && ComparableUtils.is(minPrice).greaterThan(maxPrice)) {
             String minPriceIsGreaterThanMaxPrice = MessageFormat.format("minPrice {0} cannot be greater than maxPrice {1}", minPrice, maxPrice);
-            log.error(minPriceIsGreaterThanMaxPrice);
-            throw new ValidationException(minPriceIsGreaterThanMaxPrice);
+            logAndThrowValidationException(minPriceIsGreaterThanMaxPrice);
         }
     }
 
     public void validateParamsNotEmpty(String params) {
         if (StringUtils.isEmpty(params)) {
             String paramsIsEmpty = "params is empty";
-            log.error(paramsIsEmpty);
-            throw new ValidationException(paramsIsEmpty);
+            logAndThrowValidationException(paramsIsEmpty);
         }
     }
 
-    public void batchInsert(List<GameSalesView> views) {
-        String sql = "INSERT INTO game_sales (id, game_no, game_name, game_code, type, cost_price, tax, sale_price, date_of_sale) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
-        jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
-            @Override
-            public void setValues(PreparedStatement ps, int i) throws SQLException {
-                GameSalesView entity = views.get(i);
-                ps.setString(1, String.valueOf(entity.getId()));
-                ps.setString(2, String.valueOf(entity.getGameNo()));
-                ps.setString(3, entity.getGameName());
-                ps.setString(4, entity.getGameCode());
-                ps.setString(5, String.valueOf(entity.getType()));
-                ps.setString(6, String.valueOf(entity.getCostPrice()));
-                ps.setString(7, String.valueOf(entity.getTax()));
-                ps.setString(8, String.valueOf(entity.getSalePrice()));
-                ps.setString(9, String.valueOf(entity.getDateOfSale()));
-            }
-            @Override
-            public int getBatchSize() {
-                return views.size();
-            }
+    private void validateValidSortDirection(String sortDir) {
+        if (!StringUtils.equalsAnyIgnoreCase(sortDir, GameSalesConstants.SORT_DIR_ASC, GameSalesConstants.SORT_DIR_DESC)) {
+            String invalidSortDirection = MessageFormat.format("parameter sortDir:{0} is invalid. It should be either {1} or {2}", sortDir, GameSalesConstants.SORT_DIR_ASC, GameSalesConstants.SORT_DIR_DESC);
+            logAndThrowValidationException(invalidSortDirection);
+        }
+    }
+
+    private void validateValidSortFields(String sortField) {
+        String[] validColumnFieldsName = {"id", "game_no", "game_name", "game_code", "type", "cost_price", "tax", "sale_price", "date_of_sale"};
+        if (!GameSalesUtil.isStringInArrayIgnoreCase(sortField, validColumnFieldsName)) {
+            String invalidSortFields = MessageFormat.format("parameter sortField:{0} is not a valid field in game_sales table.", sortField);
+            logAndThrowValidationException(invalidSortFields);
+        }
+    }
+
+    private void logAndThrowValidationException(String errorMessage) {
+        log.error(errorMessage);
+        throw new ValidationException(errorMessage);
+    }
+
+    private void updateImportLog(ImportLogView view) {
+        ImportLogView viewToUpdate = importLogRepository.findById(view.getId()).orElseThrow(() -> {
+            String unableToFindRecordWithId = MessageFormat.format("Unable to find view with id {0}", view.getId());
+            return new ValidationException(unableToFindRecordWithId);
         });
+        viewToUpdate.setTotalRecordsCount(view.getTotalRecordsCount());
+        if (StringUtils.isNotBlank(view.getStatus())) {
+            viewToUpdate.setStatus(view.getStatus());
+        }
+
+        if (view.getStartTime() != null) {
+            viewToUpdate.setStartTime(view.getStartTime());
+        }
+
+        if (view.getEndTime() != null) {
+            viewToUpdate.setEndTime(view.getEndTime());
+        }
+
+        if (view.getTotalProcessedRecordsCount() != null) {
+            viewToUpdate.setTotalProcessedRecordsCount(view.getTotalProcessedRecordsCount());
+        }
+
+        if (view.getInvalidRecordsCount() != null) {
+            viewToUpdate.setInvalidRecordsCount(view.getInvalidRecordsCount());
+        }
+
+        if (view.getTotalRecordsCount() != null) {
+            viewToUpdate.setTotalRecordsCount(view.getTotalRecordsCount());
+        }
+        importLogRepository.save(viewToUpdate);
     }
 }
