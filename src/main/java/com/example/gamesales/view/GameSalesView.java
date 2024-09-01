@@ -11,17 +11,14 @@ import java.time.LocalDateTime;
 @Entity
 @Getter
 @Setter
-@Table(name = "game_sales",
-        indexes = {
-                @Index(columnList = "gameNo"),
-                @Index(columnList = "dateOfSale DESC"),
-                @Index(columnList = "dateOfSale DESC, salePrice"),
-                @Index(columnList = "dateOfSale DESC, gameNo, salePrice")
-        }
-)
+@Table(name = "game_sales"
+        , indexes = {
+        @Index(columnList = "dateOfSale"),
+        @Index(columnList = "dateOfSale, salePrice"),
+        @Index(columnList = "dateOfSale, salePrice, gameNo")
+})
 public class GameSalesView {
     @Id
-    @GeneratedValue(strategy = GenerationType.SEQUENCE)
     private Long id;
     @Column(nullable = false)
     private int gameNo;

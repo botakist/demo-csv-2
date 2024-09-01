@@ -6,15 +6,19 @@ import com.example.gamesales.entity.TotalSalesParamsEntity;
 import com.example.gamesales.exception.ValidationException;
 import com.example.gamesales.repository.GameSalesRepository;
 import com.example.gamesales.repository.ImportLogRepository;
+import com.example.gamesales.task.BatchInsertGameSalesTaskExecutor;
+import com.example.gamesales.task.BatchInsertInvalidRecordsTaskExecutor;
 import com.example.gamesales.util.GameSalesUtil;
 import com.example.gamesales.view.GameSalesView;
 import com.example.gamesales.view.ImportLogView;
+import com.example.gamesales.view.InvalidRecordView;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.LineIterator;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.compare.ComparableUtils;
@@ -27,8 +31,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import javax.transaction.Transactional;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.text.MessageFormat;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -40,7 +46,6 @@ import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -86,8 +91,11 @@ public class GameSalesService {
     }
 
     public void save(MultipartFile csvFile, int totalRecordsCount) {
-        List<GameSalesView> gameSalesViews = new ArrayList<>();
+
         ExecutorService executorService = Executors.newFixedThreadPool(threadPoolSize);
+
+        AtomicInteger validRecordsCount = new AtomicInteger();
+        AtomicInteger invalidRecordsCount = new AtomicInteger();
 
         ImportLogView importLogView = new ImportLogView();
         importLogView.setTotalRecordsCount(totalRecordsCount);
@@ -97,68 +105,60 @@ public class GameSalesService {
         importLogView.setStatus("IN_PROGRESS");
         importLogRepository.save(importLogView);
 
-        AtomicInteger validRecordsCount = new AtomicInteger();
-        AtomicInteger invalidRecordsCount = new AtomicInteger();
+        List<GameSalesView> validGameSalesViews = new ArrayList<>();
+        List<CSVRecord> invalidGameSalesRecords = new ArrayList<>();
+        try (BufferedReader fileReader = new BufferedReader(new InputStreamReader(csvFile.getInputStream(), StandardCharsets.UTF_8));
+             CSVParser csvParser = new CSVParser(fileReader, CSVFormat.DEFAULT.withFirstRecordAsHeader().withIgnoreHeaderCase().withTrim())) {
+            Iterable<CSVRecord> csvRecords = csvParser.getRecords();
 
-        try (LineIterator it = FileUtils.lineIterator(GameSalesUtil.multipartToFile(csvFile), "UTF-8")) {
-            // skip csv file header line
-            if (it.hasNext()) {
-                it.next();
-            }
-
-            while (it.hasNext()) {
-                String line = it.nextLine();
-                line = line.replace("\"", "");
-                String[] fields = line.split(",");
+            for (CSVRecord csvRecord : csvRecords) {
                 try {
-                    gameSalesViews.add(parseCsvLineToGameSalesView(fields));
-
+                    // separate valid and invalid records first.
+                    GameSalesView view = parseCsvLineToGameSalesView(csvRecord);
+                    if (isValidData(view)) {
+                        validGameSalesViews.add(view);
+                    } else {
+                        invalidGameSalesRecords.add(csvRecord);
+                    }
                 } catch (NullPointerException | NumberFormatException | DateTimeParseException e) {
-                    invalidRecordsCount.getAndIncrement();
-                    importLogView.setInvalidRecordsCount(invalidRecordsCount.get());
-                    updateImportLog(importLogView);
-                    continue;
+                    log.error(e.getMessage(), e);
+                    throw new ValidationException("error in parsing data in csv file.");
                 }
+            }
+            BatchInsertGameSalesTaskExecutor executor = new BatchInsertGameSalesTaskExecutor(executorService, jdbcTemplate);
+            executor.executeBatchGameSalesInserts(validGameSalesViews, batchSize, validRecordsCount);
 
-                if (gameSalesViews.size() >= batchSize) {
-                    List<GameSalesView> batch = new ArrayList<>(gameSalesViews);
-                    executorService.submit(() -> validateAndBatchInsert(batch, invalidRecordsCount, validRecordsCount));
-                    importLogView.setTotalProcessedRecordsCount(validRecordsCount.get());
-                    importLogView.setInvalidRecordsCount(invalidRecordsCount.get());
-                    updateImportLog(importLogView);
-                    gameSalesViews.clear();
-                }
-            }
-            if (!gameSalesViews.isEmpty()) {
-                executorService.submit(() -> validateAndBatchInsert(gameSalesViews, invalidRecordsCount, validRecordsCount));
-                importLogView.setTotalProcessedRecordsCount(validRecordsCount.get());
-                importLogView.setInvalidRecordsCount(invalidRecordsCount.get());
-                updateImportLog(importLogView);
-            }
+            BatchInsertInvalidRecordsTaskExecutor executor2 = new BatchInsertInvalidRecordsTaskExecutor(executorService, jdbcTemplate);
+            executor2.executeBatchInvalidRecordInserts(mapToInvalidRecordViews(invalidGameSalesRecords), batchSize, invalidRecordsCount);
+
+            importLogView.setInvalidRecordsCount(invalidRecordsCount.get());
+            importLogView.setTotalProcessedRecordsCount(validRecordsCount.get());
             importLogView.setStatus("COMPLETED");
             importLogView.setEndTime(LocalDateTime.now());
             updateImportLog(importLogView);
+
         } catch (IOException e) {
             log.error(e.getMessage(), e);
+            importLogView.setStatus("ERROR");
+            importLogView.setEndTime(LocalDateTime.now());
+            updateImportLog(importLogView);
+            throw new ValidationException("error reading data from csv file.");
         } finally {
             executorService.shutdown();
         }
     }
 
-
-    private void validateAndBatchInsert(List<GameSalesView> unvalidatedBatch, AtomicInteger invalidRecordsCount, AtomicInteger validRecordsCount) {
-        List<GameSalesView> validatedBatch = new ArrayList<>();
-
-        for (GameSalesView view : unvalidatedBatch) {
-            if (isValidData(view)) {
-                validatedBatch.add(view);
-                validRecordsCount.getAndIncrement();
-            } else {
-                invalidRecordsCount.getAndIncrement();
-            }
+    private List<InvalidRecordView> mapToInvalidRecordViews(List<CSVRecord> csvRecords) {
+        List<InvalidRecordView> views = new ArrayList<>();
+        LocalDateTime now = LocalDateTime.now();
+        for (CSVRecord csvRecord : csvRecords) {
+            InvalidRecordView view = new InvalidRecordView();
+            view.setInvalidRecordRowId(csvRecord.getRecordNumber());
+            view.setInvalidRecordRowText(csvRecord.toString());
+            view.setCreatedOn(now);
+            views.add(view);
         }
-        log.info(Thread.currentThread().getName());
-        batchInsert(validatedBatch);
+        return views;
     }
 
     private boolean isValidData(GameSalesView view) {
@@ -174,17 +174,17 @@ public class GameSalesService {
         return id && gameNo && gameName && gameCode && type && costPrice && tax && salePrice && dateOfSale;
     }
 
-    private GameSalesView parseCsvLineToGameSalesView(String[] fields) throws NullPointerException, NumberFormatException, DateTimeParseException {
+    private GameSalesView parseCsvLineToGameSalesView(CSVRecord csvRecord) throws NullPointerException, NumberFormatException, DateTimeParseException {
         GameSalesView view = new GameSalesView();
-        view.setId(Long.parseLong(fields[0]));
-        view.setGameNo(Integer.parseInt(fields[1]));
-        view.setGameName(fields[2]);
-        view.setGameCode(fields[3]);
-        view.setType(Integer.parseInt(fields[4]));
-        view.setCostPrice(Double.parseDouble(fields[5]));
-        view.setTax(Double.parseDouble(fields[6]));
-        view.setSalePrice(Double.parseDouble(fields[7]));
-        view.setDateOfSale(LocalDateTime.parse(fields[8], DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS")));
+        view.setId(Long.parseLong(csvRecord.get(0)));
+        view.setGameNo(Integer.parseInt(csvRecord.get(1)));
+        view.setGameName(csvRecord.get(2));
+        view.setGameCode(csvRecord.get(3));
+        view.setType(Integer.parseInt(csvRecord.get(4)));
+        view.setCostPrice(Double.parseDouble(csvRecord.get(5)));
+        view.setTax(Double.parseDouble(csvRecord.get(6)));
+        view.setSalePrice(Double.parseDouble(csvRecord.get(7)));
+        view.setDateOfSale(LocalDateTime.parse(csvRecord.get(8), DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS")));
         return view;
     }
 
@@ -325,24 +325,6 @@ public class GameSalesService {
                 throw new ValidationException(invalidGameNo);
             }
         }
-    }
-
-    public void batchInsert(List<GameSalesView> views) {
-        String sql = "INSERT INTO game_sales (id, game_no, game_name, game_code, type, cost_price, tax, sale_price, date_of_sale) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
-        List<Object[]> batchArgs = views.stream()
-                .map(view -> new Object[]{
-                        view.getId(),
-                        view.getGameNo(),
-                        view.getGameName(),
-                        view.getGameCode(),
-                        view.getType(),
-                        view.getCostPrice(),
-                        view.getTax(),
-                        view.getSalePrice(),
-                        view.getDateOfSale()
-                })
-                .collect(Collectors.toList());
-        jdbcTemplate.batchUpdate(sql, batchArgs);
     }
 
     public HashMap<String, Object> getTotalSalesWith(TotalSalesParamsEntity totalSalesParamsEntity) {
