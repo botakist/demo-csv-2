@@ -5,13 +5,13 @@ import com.example.gamesales.entity.GameSalesParamsEntity;
 import com.example.gamesales.entity.TotalSalesParamsEntity;
 import com.example.gamesales.exception.ValidationException;
 import com.example.gamesales.repository.GameSalesRepository;
-import com.example.gamesales.repository.ImportLogRepository;
+import com.example.gamesales.repository.ProgressTrackingRepository;
 import com.example.gamesales.task.BatchInsertGameSalesTaskExecutor;
 import com.example.gamesales.task.BatchInsertInvalidRecordsTaskExecutor;
 import com.example.gamesales.util.GameSalesUtil;
 import com.example.gamesales.view.GameSalesView;
-import com.example.gamesales.view.ImportLogView;
 import com.example.gamesales.view.InvalidRecordView;
+import com.example.gamesales.view.ProgressTrackingView;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,6 +22,7 @@ import org.apache.commons.csv.CSVRecord;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.compare.ComparableUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -44,7 +45,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
@@ -52,9 +52,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class GameSalesService {
     private static final ObjectMapper mapper = new ObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     private final GameSalesRepository gameSalesRepository;
-    private final ImportLogRepository importLogRepository;
-
+    private final ProgressTrackingRepository progressTrackingRepository;
+    private final ExecutorService executorService;
     private final JdbcTemplate jdbcTemplate;
+    private final BatchInsertService batchInsertService;
+    private final ProgressTrackingService progressTrackingService;
 
     @Value("${com.example.gamesales.import.threadpoolsize:20}")
     private int threadPoolSize;
@@ -62,10 +64,14 @@ public class GameSalesService {
     @Value("${spring.jpa.properties.hibernate.jdbc.batch_size:10000}")
     private int batchSize;
 
-    public GameSalesService(GameSalesRepository gameSalesRepository, ImportLogRepository importLogRepository, JdbcTemplate jdbcTemplate) {
+    @Autowired
+    public GameSalesService(GameSalesRepository gameSalesRepository, ProgressTrackingRepository progressTrackingRepository, ExecutorService executorService, JdbcTemplate jdbcTemplate, BatchInsertService batchInsertService, ProgressTrackingService progressTrackingService) {
         this.gameSalesRepository = gameSalesRepository;
-        this.importLogRepository = importLogRepository;
+        this.progressTrackingRepository = progressTrackingRepository;
+        this.executorService = executorService;
         this.jdbcTemplate = jdbcTemplate;
+        this.batchInsertService = batchInsertService;
+        this.progressTrackingService = progressTrackingService;
     }
 
     public int validateCsvFile(MultipartFile csvFile) {
@@ -92,18 +98,10 @@ public class GameSalesService {
 
     public void save(MultipartFile csvFile, int totalRecordsCount) {
 
-        ExecutorService executorService = Executors.newFixedThreadPool(threadPoolSize);
-
         AtomicInteger validRecordsCount = new AtomicInteger();
         AtomicInteger invalidRecordsCount = new AtomicInteger();
 
-        ImportLogView importLogView = new ImportLogView();
-        importLogView.setTotalRecordsCount(totalRecordsCount);
-        importLogView.setStartTime(LocalDateTime.now());
-        importLogView.setTotalProcessedRecordsCount(0);
-        importLogView.setInvalidRecordsCount(0);
-        importLogView.setStatus("IN_PROGRESS");
-        importLogRepository.save(importLogView);
+        ProgressTrackingView progressTrackingView = initialiseProgressView(totalRecordsCount);
 
         List<GameSalesView> validGameSalesViews = new ArrayList<>();
         List<CSVRecord> invalidGameSalesRecords = new ArrayList<>();
@@ -125,27 +123,54 @@ public class GameSalesService {
                     throw new ValidationException("error in parsing data in csv file.");
                 }
             }
-            BatchInsertGameSalesTaskExecutor executor = new BatchInsertGameSalesTaskExecutor(executorService, jdbcTemplate);
-            executor.executeBatchGameSalesInserts(validGameSalesViews, batchSize, validRecordsCount);
+            // use JPA repository (very slow)
+//            gameSalesRepository.saveAll(validGameSalesViews);
 
-            BatchInsertInvalidRecordsTaskExecutor executor2 = new BatchInsertInvalidRecordsTaskExecutor(executorService, jdbcTemplate);
+            // use jdbcTemplate batch insertion single threaded (still very slow)
+//            int totalCount = validGameSalesViews.size();
+//            for (int i = 0; i < totalCount; i += batchSize) {
+//                int endIndex = Math.min(i + batchSize, totalCount);
+//                // get sublist for current batch
+//                List<GameSalesView> batchList = validGameSalesViews.subList(i, endIndex);
+//                batchInsertService.batchInsertGameSales(batchList);
+//                validRecordsCount.addAndGet(batchList.size());
+//            }
+
+            // use jdbcTemplate batch insertion multi-threaded txn
+            BatchInsertGameSalesTaskExecutor executor = new BatchInsertGameSalesTaskExecutor(executorService, batchInsertService, progressTrackingService);
+            executor.executeBatchGameSalesInserts(validGameSalesViews, batchSize, validRecordsCount, progressTrackingView);
+
+            BatchInsertInvalidRecordsTaskExecutor executor2 = new BatchInsertInvalidRecordsTaskExecutor(executorService, batchInsertService);
             executor2.executeBatchInvalidRecordInserts(mapToInvalidRecordViews(invalidGameSalesRecords), batchSize, invalidRecordsCount);
-
-            importLogView.setInvalidRecordsCount(invalidRecordsCount.get());
-            importLogView.setTotalProcessedRecordsCount(validRecordsCount.get());
-            importLogView.setStatus("COMPLETED");
-            importLogView.setEndTime(LocalDateTime.now());
-            updateImportLog(importLogView);
 
         } catch (IOException e) {
             log.error(e.getMessage(), e);
-            importLogView.setStatus("ERROR");
-            importLogView.setEndTime(LocalDateTime.now());
-            updateImportLog(importLogView);
+            progressTrackingView.setStatus("ERROR");
+            progressTrackingView.setEndTime(LocalDateTime.now());
+            updateProgress(progressTrackingView);
             throw new ValidationException("error reading data from csv file.");
         } finally {
             executorService.shutdown();
+            // commenting this part returns the response faster while the app still runs the batch inserts in the background.
+//            try {
+//                executorService.awaitTermination(1, TimeUnit.MINUTES);
+//            } catch (InterruptedException e) {
+//                e.printStackTrace();
+//            } finally {
+//                executorService.shutdownNow();
+//            }
         }
+    }
+
+    private ProgressTrackingView initialiseProgressView(int totalRecordsCount) {
+        ProgressTrackingView progressTrackingView = new ProgressTrackingView();
+        progressTrackingView.setTotalRecordsCount(totalRecordsCount);
+        progressTrackingView.setStartTime(LocalDateTime.now());
+        progressTrackingView.setTotalProcessedRecordsCount(0);
+        progressTrackingView.setInvalidRecordsCount(0);
+        progressTrackingView.setStatus("IN_PROGRESS");
+        progressTrackingRepository.save(progressTrackingView);
+        return progressTrackingView;
     }
 
     private List<InvalidRecordView> mapToInvalidRecordViews(List<CSVRecord> csvRecords) {
@@ -169,7 +194,7 @@ public class GameSalesService {
         boolean type = view.getType() == 1 || view.getType() == 2;
         boolean costPrice = view.getCostPrice() >= 0 && view.getCostPrice() <= 100;
         boolean tax = view.getTax() >= 0;
-        boolean salePrice = view.getSalePrice() >= 0 && (view.getSalePrice() == (view.getCostPrice() + view.getCostPrice() * view.getTax()));
+        boolean salePrice = view.getSalePrice() >= 0;
         boolean dateOfSale = view.getDateOfSale() != null;
         return id && gameNo && gameName && gameCode && type && costPrice && tax && salePrice && dateOfSale;
     }
@@ -405,8 +430,8 @@ public class GameSalesService {
         throw new ValidationException(errorMessage);
     }
 
-    private void updateImportLog(ImportLogView view) {
-        ImportLogView viewToUpdate = importLogRepository.findById(view.getId()).orElseThrow(() -> {
+    private void updateProgress(ProgressTrackingView view) {
+        ProgressTrackingView viewToUpdate = progressTrackingRepository.findById(view.getId()).orElseThrow(() -> {
             String unableToFindRecordWithId = MessageFormat.format("Unable to find view with id {0}", view.getId());
             return new ValidationException(unableToFindRecordWithId);
         });
@@ -434,6 +459,6 @@ public class GameSalesService {
         if (view.getTotalRecordsCount() != null) {
             viewToUpdate.setTotalRecordsCount(view.getTotalRecordsCount());
         }
-        importLogRepository.save(viewToUpdate);
+        progressTrackingRepository.save(viewToUpdate);
     }
 }

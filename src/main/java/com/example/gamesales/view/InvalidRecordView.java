@@ -12,7 +12,8 @@ import java.time.LocalDateTime;
 @Table(name = "invalid_record")
 public class InvalidRecordView {
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "invalid_rec_seq")
+    @SequenceGenerator(name = "invalid_rec_seq", sequenceName = "invalid_rec_seq", allocationSize = 5000)
     private Long id;
     private Long importLogId;
     @Column(nullable = false)

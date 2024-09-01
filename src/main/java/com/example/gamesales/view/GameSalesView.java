@@ -37,4 +37,9 @@ public class GameSalesView {
     @JsonSerialize(using = CustomLocalDateTimeSerializer.class)
     @Column(nullable = false)
     private LocalDateTime dateOfSale;
+
+    /**
+     *     @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "game_sales_seq")
+     * //    @SequenceGenerator(name = "game_sales_seq", sequenceName = "game_sales_seq", allocationSize = 10000)
+     */
 }

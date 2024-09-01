@@ -11,12 +11,13 @@ import java.time.LocalDateTime;
 @Entity
 @Getter
 @Setter
-@Table(name = "import_log")
+@Table(name = "progress_tracking")
 @Cacheable
 @Cache(usage = CacheConcurrencyStrategy.NONSTRICT_READ_WRITE)
-public class ImportLogView {
+public class ProgressTrackingView {
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "prog_trk_seq")
+    @SequenceGenerator(name = "prog_trk_seq", sequenceName = "prog_trk_seq", allocationSize = 5000)
     private Long id;
     private Integer totalRecordsCount;
     private Integer totalProcessedRecordsCount;

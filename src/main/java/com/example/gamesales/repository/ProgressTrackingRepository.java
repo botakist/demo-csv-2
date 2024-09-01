@@ -1,9 +1,9 @@
 package com.example.gamesales.repository;
 
-import com.example.gamesales.view.ImportLogView;
+import com.example.gamesales.view.ProgressTrackingView;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public interface ImportLogRepository extends JpaRepository<ImportLogView, Long> {
+public interface ProgressTrackingRepository extends JpaRepository<ProgressTrackingView, Long> {
 }
