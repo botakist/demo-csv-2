@@ -13,12 +13,14 @@ import java.time.LocalDateTime;
 @Setter
 @Table(name = "game_sales"
         , indexes = {
-        @Index(columnList = "dateOfSale"),
-        @Index(columnList = "dateOfSale, salePrice"),
-        @Index(columnList = "dateOfSale, salePrice, gameNo")
+        @Index(name = "idx_date_of_sale", columnList = "dateOfSale"),
+        @Index(name = "idx_date_of_sale_sale_price", columnList = "dateOfSale, salePrice"),
+        @Index(name = "idx_date_of_sale_sale_price_game_no", columnList = "dateOfSale, salePrice, gameNo")
 })
 public class GameSalesView {
     @Id
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "game_sales_seq")
+    @SequenceGenerator(name = "game_sales_seq", sequenceName = "game_sales_seq")
     private Long id;
     @Column(nullable = false)
     private int gameNo;
@@ -37,9 +39,4 @@ public class GameSalesView {
     @JsonSerialize(using = CustomLocalDateTimeSerializer.class)
     @Column(nullable = false)
     private LocalDateTime dateOfSale;
-
-    /**
-     *     @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "game_sales_seq")
-     * //    @SequenceGenerator(name = "game_sales_seq", sequenceName = "game_sales_seq", allocationSize = 10000)
-     */
 }

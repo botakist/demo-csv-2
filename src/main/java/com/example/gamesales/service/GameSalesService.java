@@ -142,7 +142,7 @@ public class GameSalesService {
 
     private GameSalesView parseCsvLineToGameSalesView(CSVRecord csvRecord) throws NullPointerException, NumberFormatException, DateTimeParseException {
         GameSalesView view = new GameSalesView();
-        view.setId(Long.parseLong(csvRecord.get(0)));
+//        view.setId(Long.parseLong(csvRecord.get(0)));
         view.setGameNo(Integer.parseInt(csvRecord.get(1)));
         view.setGameName(csvRecord.get(2));
         view.setGameCode(csvRecord.get(3));

@@ -12,10 +12,12 @@ import java.time.LocalDateTime;
 @Table(name = "invalid_record")
 public class InvalidRecordView {
     @Id
-    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "invalid_rec_seq")
-    @SequenceGenerator(name = "invalid_rec_seq", sequenceName = "invalid_rec_seq", allocationSize = 5000)
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "invalid_record_seq")
+    @SequenceGenerator(name = "invalid_record_seq", sequenceName = "invalid_record_seq")
     private Long id;
-    private Long importLogId;
+    @ManyToOne
+    @JoinColumn(referencedColumnName = "id", nullable = false, foreignKey = @ForeignKey(name = "fk_progress_track_view_id"))
+    private ProgressTrackingView progressTrackView;
     @Column(nullable = false)
     private Long invalidRecordRowId;
     @Column(nullable = false)

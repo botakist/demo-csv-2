@@ -24,10 +24,10 @@ public class BatchInsertService {
 
     @Transactional
     public void batchInsertGameSales(List<GameSalesView> views) {
-        String sql = "INSERT INTO game_sales (id, game_no, game_name, game_code, type, cost_price, tax, sale_price, date_of_sale) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        String sql = "INSERT INTO game_sales (game_no, game_name, game_code, type, cost_price, tax, sale_price, date_of_sale) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
         List<Object[]> batchArgs = views.stream()
                 .map(view -> new Object[]{
-                        view.getId(),
+//                        view.getId(),
                         view.getGameNo(),
                         view.getGameName(),
                         view.getGameCode(),
@@ -47,13 +47,14 @@ public class BatchInsertService {
     }
 
     @Transactional
-    public void batchInsertInvalidRecords(List<InvalidRecordView> views) {
-        String sql = "INSERT INTO invalid_record (invalid_record_row_id, invalid_record_row_text, created_on) VALUES (?, ?, ?)";
+    public void batchInsertInvalidRecords(List<InvalidRecordView> views, Long progressTrackViewId) {
+        String sql = "INSERT INTO invalid_record (invalid_record_row_id, invalid_record_row_text, created_on, progress_track_view_id) VALUES (?, ?, ?, ?)";
         List<Object[]> batchArgs = views.stream()
                 .map(view -> new Object[]{
                         view.getInvalidRecordRowId(),
                         view.getInvalidRecordRowText(),
-                        view.getCreatedOn()
+                        view.getCreatedOn(),
+                        progressTrackViewId
                 })
                 .collect(Collectors.toList());
         try {

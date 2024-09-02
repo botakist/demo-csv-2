@@ -1,0 +1,581 @@
+{
+	"info": {
+		"_postman_id": "8a48cfb9-72b8-46ba-8b7d-2f474e698a6b",
+		"name": "demo_20240902",
+		"description": "how to use:\n\n- start up game sales spring boot app\n    \n- start up mysql database locally, create schema called `demo`\n    \n- run create_database_schemas.sql on mysql table, expect `game_sales`, `progress_tracking` and `invalid_record` tables to be created\n    \n- fire the respsective APIs listed",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "37167054"
+	},
+	"item": [
+		{
+			"name": "getGameSales (empty params)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Successful POST request\", function () {",
+							"    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+							"});",
+							""
+						],
+						"type": "text/javascript",
+						"packages": {}
+					}
+				}
+			],
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n\t\"name\": \"Add your name in the body\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/getGameSales?params=%7B%7D&sortField=id&sortDir=desc&size=100",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"getGameSales"
+					],
+					"query": [
+						{
+							"key": "params",
+							"value": "%7B%7D"
+						},
+						{
+							"key": "sortField",
+							"value": "id"
+						},
+						{
+							"key": "sortDir",
+							"value": "desc"
+						},
+						{
+							"key": "size",
+							"value": "100"
+						},
+						{
+							"key": "page",
+							"value": "2",
+							"disabled": true
+						}
+					]
+				},
+				"description": "This is a POST request, submitting data to an API via the request body. This request submits JSON data, and the data is reflected in the response.\n\nA successful POST request typically returns a `200 OK` or `201 Created` response code."
+			},
+			"response": []
+		},
+		{
+			"name": "getGameSales (with to and from)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Successful POST request\", function () {",
+							"    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+							"});",
+							""
+						],
+						"type": "text/javascript",
+						"packages": {}
+					}
+				}
+			],
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n\t\"name\": \"Add your name in the body\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/getGameSales?params=%7B%22from%22%3A%222024-04-01T00%3A00%3A00Z%22%2C%20%22to%22%3A%222024-04-02T00%3A00%3A00Z%22%7D&sortDir=asc&page=1",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"getGameSales"
+					],
+					"query": [
+						{
+							"key": "params",
+							"value": "%7B%22from%22%3A%222024-04-01T00%3A00%3A00Z%22%2C%20%22to%22%3A%222024-04-02T00%3A00%3A00Z%22%7D"
+						},
+						{
+							"key": "sortField",
+							"value": "date_of_sal",
+							"disabled": true
+						},
+						{
+							"key": "sortDir",
+							"value": "asc"
+						},
+						{
+							"key": "page",
+							"value": "1"
+						}
+					]
+				},
+				"description": "This is a POST request, submitting data to an API via the request body. This request submits JSON data, and the data is reflected in the response.\n\nA successful POST request typically returns a `200 OK` or `201 Created` response code."
+			},
+			"response": []
+		},
+		{
+			"name": "getGameSales (with to and from, maxPrice)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Successful POST request\", function () {",
+							"    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+							"});",
+							""
+						],
+						"type": "text/javascript",
+						"packages": {}
+					}
+				}
+			],
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n\t\"name\": \"Add your name in the body\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/getGameSales?params=%7B%22from%22%3A%222024-04-01T00%3A00%3A00Z%22%2C%20%22to%22%3A%222024-04-02T00%3A00%3A00Z%22%2C%20%22maxPrice%22%3A10%7D",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"getGameSales"
+					],
+					"query": [
+						{
+							"key": "params",
+							"value": "%7B%22from%22%3A%222024-04-01T00%3A00%3A00Z%22%2C%20%22to%22%3A%222024-04-02T00%3A00%3A00Z%22%2C%20%22maxPrice%22%3A10%7D"
+						},
+						{
+							"key": "sortDir",
+							"value": "asc",
+							"disabled": true
+						},
+						{
+							"key": "sortField",
+							"value": "sale_price",
+							"disabled": true
+						},
+						{
+							"key": "page",
+							"value": "3",
+							"disabled": true
+						}
+					]
+				},
+				"description": "This is a POST request, submitting data to an API via the request body. This request submits JSON data, and the data is reflected in the response.\n\nA successful POST request typically returns a `200 OK` or `201 Created` response code."
+			},
+			"response": []
+		},
+		{
+			"name": "getGameSales (with to and from, valid minPrice and maxPrice)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Successful POST request\", function () {",
+							"    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+							"});",
+							""
+						],
+						"type": "text/javascript",
+						"packages": {}
+					}
+				}
+			],
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n\t\"name\": \"Add your name in the body\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/getGameSales?params=%7B%22from%22%3A%222024-04-01T00%3A00%3A00Z%22%2C%20%22to%22%3A%222024-04-02T00%3A00%3A00Z%22%2C%20%22maxPrice%22%3A10%2C%20%22minPrice%22%3A%20%225%22%7D",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"getGameSales"
+					],
+					"query": [
+						{
+							"key": "params",
+							"value": "%7B%22from%22%3A%222024-04-01T00%3A00%3A00Z%22%2C%20%22to%22%3A%222024-04-02T00%3A00%3A00Z%22%2C%20%22maxPrice%22%3A10%2C%20%22minPrice%22%3A%20%225%22%7D"
+						},
+						{
+							"key": "sortDir",
+							"value": "asc",
+							"disabled": true
+						},
+						{
+							"key": "sortField",
+							"value": "sale_price",
+							"disabled": true
+						},
+						{
+							"key": "page",
+							"value": "3",
+							"disabled": true
+						}
+					]
+				},
+				"description": "This is a POST request, submitting data to an API via the request body. This request submits JSON data, and the data is reflected in the response.\n\nA successful POST request typically returns a `200 OK` or `201 Created` response code."
+			},
+			"response": []
+		},
+		{
+			"name": "getGameSales (with to and from, invalid minPrice",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Successful POST request\", function () {",
+							"    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+							"});",
+							""
+						],
+						"type": "text/javascript",
+						"packages": {}
+					}
+				}
+			],
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n\t\"name\": \"Add your name in the body\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/getGameSales?params=%7B%22from%22%3A%222024-04-01T00%3A00%3A00Z%22%2C%20%22to%22%3A%222024-04-02T00%3A00%3A00Z%22%2C%20%22maxPrice%22%3A10%2C%20%22minPrice%22%3A%20%2212%22%7D",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"getGameSales"
+					],
+					"query": [
+						{
+							"key": "params",
+							"value": "%7B%22from%22%3A%222024-04-01T00%3A00%3A00Z%22%2C%20%22to%22%3A%222024-04-02T00%3A00%3A00Z%22%2C%20%22maxPrice%22%3A10%2C%20%22minPrice%22%3A%20%2212%22%7D"
+						},
+						{
+							"key": "sortDir",
+							"value": "asc",
+							"disabled": true
+						},
+						{
+							"key": "sortField",
+							"value": "sale_price",
+							"disabled": true
+						},
+						{
+							"key": "page",
+							"value": "3",
+							"disabled": true
+						}
+					]
+				},
+				"description": "This is a POST request, submitting data to an API via the request body. This request submits JSON data, and the data is reflected in the response.\n\nA successful POST request typically returns a `200 OK` or `201 Created` response code."
+			},
+			"response": []
+		},
+		{
+			"name": "getTotalSales (total sales)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Successful POST request\", function () {",
+							"    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+							"});",
+							""
+						],
+						"type": "text/javascript",
+						"packages": {}
+					}
+				}
+			],
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n\t\"name\": \"Add your name in the body\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/getTotalSales?params=%7B%22category%22%3A%22totalSales%22%2C%22from%22%3A%222024-04-01T00%3A00%3A00Z%22%2C%20%22to%22%3A%222024-04-04T00%3A00%3A00Z%22%7D",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"getTotalSales"
+					],
+					"query": [
+						{
+							"key": "params",
+							"value": "%7B%22category%22%3A%22totalSales%22%2C%22from%22%3A%222024-04-01T00%3A00%3A00Z%22%2C%20%22to%22%3A%222024-04-04T00%3A00%3A00Z%22%7D"
+						}
+					]
+				},
+				"description": "This is a POST request, submitting data to an API via the request body. This request submits JSON data, and the data is reflected in the response.\n\nA successful POST request typically returns a `200 OK` or `201 Created` response code."
+			},
+			"response": []
+		},
+		{
+			"name": "getTotalSales (total sales w gameNo)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Successful POST request\", function () {",
+							"    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+							"});",
+							""
+						],
+						"type": "text/javascript",
+						"packages": {}
+					}
+				}
+			],
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n\t\"name\": \"Add your name in the body\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/getTotalSales?params=%7B%22category%22%3A%22totalSales%22%2C%22from%22%3A%222024-04-01T00%3A00%3A00Z%22%2C%20%22to%22%3A%222024-04-02T00%3A00%3A00Z%22%2C%20%22gameNo%22%3A%221%22%7D",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"getTotalSales"
+					],
+					"query": [
+						{
+							"key": "params",
+							"value": "%7B%22category%22%3A%22totalSales%22%2C%22from%22%3A%222024-04-01T00%3A00%3A00Z%22%2C%20%22to%22%3A%222024-04-02T00%3A00%3A00Z%22%2C%20%22gameNo%22%3A%221%22%7D"
+						}
+					]
+				},
+				"description": "This is a POST request, submitting data to an API via the request body. This request submits JSON data, and the data is reflected in the response.\n\nA successful POST request typically returns a `200 OK` or `201 Created` response code."
+			},
+			"response": []
+		},
+		{
+			"name": "getTotalSales (games count)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Successful POST request\", function () {",
+							"    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+							"});",
+							""
+						],
+						"type": "text/javascript",
+						"packages": {}
+					}
+				}
+			],
+			"protocolProfileBehavior": {
+				"disableBodyPruning": true
+			},
+			"request": {
+				"method": "GET",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n\t\"name\": \"Add your name in the body\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/getTotalSales?params=%7B%22category%22%3A%22totalGamesCount%22%2C%22from%22%3A%222024-04-01T00%3A00%3A00Z%22%2C%20%22to%22%3A%222024-04-02T00%3A00%3A00Z%22%7D",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"getTotalSales"
+					],
+					"query": [
+						{
+							"key": "params",
+							"value": "%7B%22category%22%3A%22totalGamesCount%22%2C%22from%22%3A%222024-04-01T00%3A00%3A00Z%22%2C%20%22to%22%3A%222024-04-02T00%3A00%3A00Z%22%7D"
+						}
+					]
+				},
+				"description": "This is a POST request, submitting data to an API via the request body. This request submits JSON data, and the data is reflected in the response.\n\nA successful POST request typically returns a `200 OK` or `201 Created` response code."
+			},
+			"response": []
+		},
+		{
+			"name": "import",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Successful POST request\", function () {",
+							"    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+							"});",
+							""
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n\t\"name\": \"Add your name in the body\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/info",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"info"
+					]
+				},
+				"description": "This is a POST request, submitting data to an API via the request body. This request submits JSON data, and the data is reflected in the response.\n\nA successful POST request typically returns a `200 OK` or `201 Created` response code."
+			},
+			"response": []
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "id",
+			"value": "1"
+		},
+		{
+			"key": "base_url",
+			"value": "https://postman-rest-api-learner.glitch.me/"
+		}
+	]
+}

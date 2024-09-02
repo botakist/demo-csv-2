@@ -25,7 +25,7 @@ public class UpdateProgressStatusTask implements Callable<Void> {
     public Void call() throws Exception {
         for (Future<Void> future : futures) {
             try {
-                future.get(); // This blocks until the task completes
+                future.get();
             } catch (InterruptedException | ExecutionException e) {
                 progressTrackingView.setStatus("ERROR");
                 progressTrackingView.setEndTime(LocalDateTime.now());

@@ -32,8 +32,8 @@ public class BatchInsertGameSalesTask implements Callable<Void> {
             // batch insert
             batchInsertService.batchInsertGameSales(batch);
             // Update the progress tracking count after the batch insert completes
-            int processedRecords = progressTracking.addAndGet(batch.size());
-            progressTrackingView.setTotalProcessedRecordsCount(processedRecords);
+            int validRecordsBatchSize = progressTracking.addAndGet(batch.size());
+            progressTrackingView.setTotalProcessedRecordsCount(validRecordsBatchSize);
             progressTrackingService.updateProgress(progressTrackingView);
         } catch (Exception e) {
             log.error("Batch insert failed", e);

@@ -177,4 +177,17 @@ public class ValidatorService {
         boolean dateOfSale = view.getDateOfSale() != null;
         return id && gameNo && gameName && gameCode && type && costPrice && tax && salePrice && dateOfSale;
     }
+
+    public boolean mockValidInvalidDataWithoutId(GameSalesView view) {
+//        boolean id = view.getId() != null && view.getId() > 0;
+        boolean gameNo = view.getGameNo() > 50; // MOCK INVALID VALIDATION HERE
+        boolean gameName = StringUtils.isNotBlank(view.getGameName()) && view.getGameName().length() <= 20;
+        boolean gameCode = StringUtils.isNotBlank(view.getGameCode()) && view.getGameCode().length() <= 5;
+        boolean type = view.getType() == 1 || view.getType() == 2;
+        boolean costPrice = view.getCostPrice() >= 0 && view.getCostPrice() <= 100;
+        boolean tax = view.getTax() >= 0;
+        boolean salePrice = view.getSalePrice() >= 0;
+        boolean dateOfSale = view.getDateOfSale() != null;
+        return gameNo && gameName && gameCode && type && costPrice && tax && salePrice && dateOfSale;
+    }
 }

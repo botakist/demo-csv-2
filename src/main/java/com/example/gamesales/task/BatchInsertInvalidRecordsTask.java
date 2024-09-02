@@ -31,10 +31,10 @@ public class BatchInsertInvalidRecordsTask  implements Callable<Void>  {
     public Void call() {
         try {
             // Perform the batch insert
-            batchInsertService.batchInsertInvalidRecords(batch);
+            batchInsertService.batchInsertInvalidRecords(batch, progressTrackingView.getId());
             // Update the progress tracking count after the batch insert completes
-            int processedRecords = progressTracking.addAndGet(batch.size());
-            progressTrackingView.setTotalProcessedRecordsCount(processedRecords);
+            int invalidRecordsBatchSize = progressTracking.addAndGet(batch.size());
+            progressTrackingView.setInvalidRecordsCount(invalidRecordsBatchSize);
             progressTrackingService.updateProgress(progressTrackingView);
         } catch (Exception e) {
             log.error("Batch insert failed", e);
