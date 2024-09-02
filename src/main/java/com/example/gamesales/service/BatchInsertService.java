@@ -42,7 +42,7 @@ public class BatchInsertService {
             jdbcTemplate.batchUpdate(sql, batchArgs);
         } catch (Exception e) {
             log.error(e.getMessage(), e);
-            throw new ValidationException(e.getMessage());
+            throw new ValidationException("An error occurred when inserting Game Sales Records into table. Please contact admin.");
         }
     }
 
@@ -60,7 +60,6 @@ public class BatchInsertService {
             jdbcTemplate.batchUpdate(sql, batchArgs);
         } catch (Exception e) {
             log.error(e.getMessage(), e);
-            throw new ValidationException(e.getMessage());
         }
     }
 }

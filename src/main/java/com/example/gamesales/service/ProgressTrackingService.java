@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import javax.transaction.Transactional;
 import java.text.MessageFormat;
+import java.time.LocalDateTime;
 
 @Service
 @Slf4j
@@ -20,6 +21,17 @@ public class ProgressTrackingService {
     @Autowired
     public ProgressTrackingService(ProgressTrackingRepository progressTrackingRepository) {
         this.progressTrackingRepository = progressTrackingRepository;
+    }
+
+    public ProgressTrackingView initialiseProgressView(int totalRecordsCount) {
+        ProgressTrackingView progressTrackingView = new ProgressTrackingView();
+        progressTrackingView.setTotalRecordsCount(totalRecordsCount);
+        progressTrackingView.setStartTime(LocalDateTime.now());
+        progressTrackingView.setTotalProcessedRecordsCount(0);
+        progressTrackingView.setInvalidRecordsCount(0);
+        progressTrackingView.setStatus("IN_PROGRESS");
+        progressTrackingRepository.save(progressTrackingView);
+        return progressTrackingView;
     }
 
     @Transactional
