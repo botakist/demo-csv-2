@@ -4,13 +4,13 @@
 - Java 8 installed
 - MySQL database and MySQL workbench installed
 - any available IDE capable to run Java applications, intelliJ preferable
-- create_db_schemas.sql executed
+- schema.sql executed
 - Postman installed and Postman template imported
 
 ## Assumptions and considerations
 - `date_of_sale` is in date time ISO-8601 format (`2024-04-01T00:00:00Z`)
 - generating mock randomised data csv via MySQL to produce 1 CSV file with 1 million records is accepted.
-- Swagger/OpenAPI specifications accepted.
+- Swagger/OpenAPI specifications (OAS) accepted. 
 
 ## How to run app
 1. Start Spring Boot App in IDE

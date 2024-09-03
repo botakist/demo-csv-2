@@ -1,5 +1,6 @@
 package com.example.gamesales.task;
 
+import com.example.gamesales.exception.BatchInsertException;
 import com.example.gamesales.service.BatchInsertService;
 import com.example.gamesales.service.ProgressTrackingService;
 import com.example.gamesales.view.InvalidRecordView;
@@ -40,6 +41,7 @@ public class BatchInsertInvalidRecordsTask  implements Callable<Void>  {
             log.error("Batch insert failed", e);
             progressTrackingView.setStatus("FAILED");
             progressTrackingService.updateProgress(progressTrackingView);
+            throw new BatchInsertException(e.getMessage());
         }
         return null;
     }
