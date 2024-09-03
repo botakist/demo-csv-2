@@ -5,19 +5,20 @@ import com.example.gamesales.entity.GameSalesParamsEntity;
 import com.example.gamesales.entity.TotalSalesParamsEntity;
 import com.example.gamesales.exception.ValidationException;
 import com.example.gamesales.repository.GameSalesRepository;
-import com.example.gamesales.repository.ImportLogRepository;
+import com.example.gamesales.task.BatchInsertGameSalesTaskExecutor;
+import com.example.gamesales.task.BatchInsertInvalidRecordsTaskExecutor;
+import com.example.gamesales.task.UpdateProgressStatusTask;
 import com.example.gamesales.util.GameSalesUtil;
+import com.example.gamesales.validators.ValidatorService;
 import com.example.gamesales.view.GameSalesView;
-import com.example.gamesales.view.ImportLogView;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.example.gamesales.view.InvalidRecordView;
+import com.example.gamesales.view.ProgressTrackingView;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.LineIterator;
-import org.apache.commons.lang3.ObjectUtils;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.lang3.compare.ComparableUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -27,29 +28,30 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import javax.transaction.Transactional;
+import java.io.BufferedReader;
 import java.io.IOException;
-import java.text.MessageFormat;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 
 @Service
 @Slf4j
 public class GameSalesService {
-    private static final ObjectMapper mapper = new ObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     private final GameSalesRepository gameSalesRepository;
-    private final ImportLogRepository importLogRepository;
-
+    private final ExecutorService executorService;
     private final JdbcTemplate jdbcTemplate;
+    private final BatchInsertService batchInsertService;
+    private final ProgressTrackingService progressTrackingService;
+    private final ValidatorService validatorService;
 
     @Value("${com.example.gamesales.import.threadpoolsize:20}")
     private int threadPoolSize;
@@ -57,179 +59,100 @@ public class GameSalesService {
     @Value("${spring.jpa.properties.hibernate.jdbc.batch_size:10000}")
     private int batchSize;
 
-    public GameSalesService(GameSalesRepository gameSalesRepository, ImportLogRepository importLogRepository, JdbcTemplate jdbcTemplate) {
+    @Autowired
+    public GameSalesService(GameSalesRepository gameSalesRepository, ExecutorService executorService, JdbcTemplate jdbcTemplate, BatchInsertService batchInsertService, ProgressTrackingService progressTrackingService, ValidatorService validatorService) {
         this.gameSalesRepository = gameSalesRepository;
-        this.importLogRepository = importLogRepository;
+        this.executorService = executorService;
         this.jdbcTemplate = jdbcTemplate;
-    }
-
-    public int validateCsvFile(MultipartFile csvFile) {
-        if (Objects.isNull(csvFile) || csvFile.isEmpty()) {
-            logAndThrowValidationException("csv file is empty.");
-
-        }
-        if (!StringUtils.endsWithIgnoreCase(csvFile.getOriginalFilename(), ".csv")) {
-            logAndThrowValidationException("file input extension is not .csv");
-        }
-
-        int totalRecordsCount = 0;
-        try {
-            totalRecordsCount = GameSalesUtil.getTotalRecordsInside(csvFile);
-            if (totalRecordsCount <= 0) {
-                logAndThrowValidationException("csv file contains 0 records");
-            }
-        } catch (IOException e) {
-            log.error(e.getMessage(), e);
-            logAndThrowValidationException("error when getting total records count in csv file.");
-        }
-        return totalRecordsCount;
+        this.batchInsertService = batchInsertService;
+        this.progressTrackingService = progressTrackingService;
+        this.validatorService = validatorService;
     }
 
     public void save(MultipartFile csvFile, int totalRecordsCount) {
-        List<GameSalesView> gameSalesViews = new ArrayList<>();
-        ExecutorService executorService = Executors.newFixedThreadPool(threadPoolSize);
-
-        ImportLogView importLogView = new ImportLogView();
-        importLogView.setTotalRecordsCount(totalRecordsCount);
-        importLogView.setStartTime(LocalDateTime.now());
-        importLogView.setTotalProcessedRecordsCount(0);
-        importLogView.setInvalidRecordsCount(0);
-        importLogView.setStatus("IN_PROGRESS");
-        importLogRepository.save(importLogView);
 
         AtomicInteger validRecordsCount = new AtomicInteger();
         AtomicInteger invalidRecordsCount = new AtomicInteger();
 
-        try (LineIterator it = FileUtils.lineIterator(GameSalesUtil.multipartToFile(csvFile), "UTF-8")) {
-            // skip csv file header line
-            if (it.hasNext()) {
-                it.next();
-            }
+        ProgressTrackingView progressTrackingView = progressTrackingService.initialiseProgressView(totalRecordsCount);
 
-            while (it.hasNext()) {
-                String line = it.nextLine();
-                line = line.replace("\"", "");
-                String[] fields = line.split(",");
+        List<GameSalesView> validGameSalesViews = new ArrayList<>();
+        List<CSVRecord> invalidGameSalesRecords = new ArrayList<>();
+        try (BufferedReader fileReader = new BufferedReader(new InputStreamReader(csvFile.getInputStream(), StandardCharsets.UTF_8));
+             CSVParser csvParser = new CSVParser(fileReader, CSVFormat.DEFAULT.withFirstRecordAsHeader().withIgnoreHeaderCase().withTrim())) {
+            Iterable<CSVRecord> csvRecords = csvParser.getRecords();
+
+            for (CSVRecord csvRecord : csvRecords) {
                 try {
-                    gameSalesViews.add(parseCsvLineToGameSalesView(fields));
-
+                    // separate valid and invalid records first.
+                    GameSalesView view = parseCsvLineToGameSalesView(csvRecord);
+                    if (validatorService.isValidData(view)) {
+                        validGameSalesViews.add(view);
+                    } else {
+                        invalidGameSalesRecords.add(csvRecord);
+                    }
                 } catch (NullPointerException | NumberFormatException | DateTimeParseException e) {
-                    invalidRecordsCount.getAndIncrement();
-                    importLogView.setInvalidRecordsCount(invalidRecordsCount.get());
-                    updateImportLog(importLogView);
-                    continue;
+                    log.error(e.getMessage(), e);
+                    throw new ValidationException("Error in parsing data in csv file.");
                 }
+            }
 
-                if (gameSalesViews.size() >= batchSize) {
-                    List<GameSalesView> batch = new ArrayList<>(gameSalesViews);
-                    executorService.submit(() -> validateAndBatchInsert(batch, invalidRecordsCount, validRecordsCount));
-                    importLogView.setTotalProcessedRecordsCount(validRecordsCount.get());
-                    importLogView.setInvalidRecordsCount(invalidRecordsCount.get());
-                    updateImportLog(importLogView);
-                    gameSalesViews.clear();
-                }
+            BatchInsertGameSalesTaskExecutor executor = new BatchInsertGameSalesTaskExecutor(executorService, batchInsertService, progressTrackingService);
+            List<Future<Void>> futures = executor.executeBatchGameSalesInserts(validGameSalesViews, batchSize, validRecordsCount, progressTrackingView);
+
+            if (!invalidGameSalesRecords.isEmpty()) {
+                BatchInsertInvalidRecordsTaskExecutor executor2 = new BatchInsertInvalidRecordsTaskExecutor(executorService, batchInsertService, progressTrackingService);
+                futures.addAll(executor2.executeBatchInvalidRecordInserts(mapToInvalidRecordViews(invalidGameSalesRecords), batchSize, invalidRecordsCount, progressTrackingView));
             }
-            if (!gameSalesViews.isEmpty()) {
-                executorService.submit(() -> validateAndBatchInsert(gameSalesViews, invalidRecordsCount, validRecordsCount));
-                importLogView.setTotalProcessedRecordsCount(validRecordsCount.get());
-                importLogView.setInvalidRecordsCount(invalidRecordsCount.get());
-                updateImportLog(importLogView);
-            }
-            importLogView.setStatus("COMPLETED");
-            importLogView.setEndTime(LocalDateTime.now());
-            updateImportLog(importLogView);
+
+            executorService.submit(new UpdateProgressStatusTask(futures, progressTrackingView, progressTrackingService));
+
         } catch (IOException e) {
             log.error(e.getMessage(), e);
+            progressTrackingView.setStatus("ERROR");
+            progressTrackingView.setEndTime(LocalDateTime.now());
+            progressTrackingService.updateProgress(progressTrackingView);
+            throw new ValidationException("error reading data from csv file.");
         } finally {
             executorService.shutdown();
-        }
-    }
-
-
-    private void validateAndBatchInsert(List<GameSalesView> unvalidatedBatch, AtomicInteger invalidRecordsCount, AtomicInteger validRecordsCount) {
-        List<GameSalesView> validatedBatch = new ArrayList<>();
-
-        for (GameSalesView view : unvalidatedBatch) {
-            if (isValidData(view)) {
-                validatedBatch.add(view);
-                validRecordsCount.getAndIncrement();
-            } else {
-                invalidRecordsCount.getAndIncrement();
+            // here
+            try {
+                if (!executorService.awaitTermination(1, TimeUnit.MINUTES)) {
+                    executorService.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                executorService.shutdownNow();
             }
         }
-        log.info(Thread.currentThread().getName());
-        batchInsert(validatedBatch);
     }
 
-    private boolean isValidData(GameSalesView view) {
-        boolean id = view.getId() != null && view.getId() > 0;
-        boolean gameNo = view.getGameNo() > 0;
-        boolean gameName = StringUtils.isNotBlank(view.getGameName()) && view.getGameName().length() <= 20;
-        boolean gameCode = StringUtils.isNotBlank(view.getGameCode()) && view.getGameCode().length() <= 5;
-        boolean type = view.getType() == 1 || view.getType() == 2;
-        boolean costPrice = view.getCostPrice() >= 0 && view.getCostPrice() <= 100;
-        boolean tax = view.getTax() >= 0;
-        boolean salePrice = view.getSalePrice() >= 0 && (view.getSalePrice() == (view.getCostPrice() + view.getCostPrice() * view.getTax()));
-        boolean dateOfSale = view.getDateOfSale() != null;
-        return id && gameNo && gameName && gameCode && type && costPrice && tax && salePrice && dateOfSale;
+    private List<InvalidRecordView> mapToInvalidRecordViews(List<CSVRecord> csvRecords) {
+        List<InvalidRecordView> views = new ArrayList<>();
+        LocalDateTime now = LocalDateTime.now();
+        for (CSVRecord csvRecord : csvRecords) {
+            InvalidRecordView view = new InvalidRecordView();
+            view.setInvalidRecordRowId(csvRecord.getRecordNumber());
+            view.setInvalidRecordRowText(csvRecord.toString());
+            view.setCreatedOn(now);
+            views.add(view);
+        }
+        return views;
     }
 
-    private GameSalesView parseCsvLineToGameSalesView(String[] fields) throws NullPointerException, NumberFormatException, DateTimeParseException {
+    private GameSalesView parseCsvLineToGameSalesView(CSVRecord csvRecord) throws NullPointerException, NumberFormatException, DateTimeParseException {
         GameSalesView view = new GameSalesView();
-        view.setId(Long.parseLong(fields[0]));
-        view.setGameNo(Integer.parseInt(fields[1]));
-        view.setGameName(fields[2]);
-        view.setGameCode(fields[3]);
-        view.setType(Integer.parseInt(fields[4]));
-        view.setCostPrice(Double.parseDouble(fields[5]));
-        view.setTax(Double.parseDouble(fields[6]));
-        view.setSalePrice(Double.parseDouble(fields[7]));
-        view.setDateOfSale(LocalDateTime.parse(fields[8], DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS")));
+//        view.setId(Long.parseLong(csvRecord.get(0)));
+        view.setGameNo(Integer.parseInt(csvRecord.get(1)));
+        view.setGameName(csvRecord.get(2));
+        view.setGameCode(csvRecord.get(3));
+        view.setType(Integer.parseInt(csvRecord.get(4)));
+        view.setCostPrice(Double.parseDouble(csvRecord.get(5)));
+        view.setTax(Double.parseDouble(csvRecord.get(6)));
+        view.setSalePrice(Double.parseDouble(csvRecord.get(7)));
+        view.setDateOfSale(LocalDateTime.parse(csvRecord.get(8), DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS")));
         return view;
     }
-
-    public GameSalesParamsEntity validateGetGameSalesRequest(String params, String sortField, String sortDir) {
-        GameSalesParamsEntity gameSalesParamsEntity = null;
-        if (StringUtils.isNotBlank(params)) {
-            try {
-                gameSalesParamsEntity = mapper.readValue(params, GameSalesParamsEntity.class);
-            } catch (JsonProcessingException e) {
-                log.error(e.getMessage(), e);
-                throw new ValidationException(GameSalesConstants.PARAMS_MAPPING_ERROR_ENCOUNTERED_CONTACT_ADMIN);
-            }
-            if (ObjectUtils.isEmpty(gameSalesParamsEntity)) {
-                log.error("gameSalesParamsEntity is null");
-                throw new ValidationException(GameSalesConstants.PARAMS_MAPPING_ERROR_ENCOUNTERED_CONTACT_ADMIN);
-            }
-            validateFromDateCannotBeAfterToDateNonMandatory(gameSalesParamsEntity.getFrom(), gameSalesParamsEntity.getTo());
-            validateMinPriceMaxPriceNonMandatory(gameSalesParamsEntity.getMinPrice(), gameSalesParamsEntity.getMaxPrice());
-        }
-        validateValidSortFields(sortField);
-        validateValidSortDirection(sortDir);
-
-        return gameSalesParamsEntity;
-    }
-
-    public TotalSalesParamsEntity validateTotalSalesRequest(String params) {
-        TotalSalesParamsEntity totalSalesParamsEntity;
-        validateParamsNotEmpty(params);
-        try {
-            totalSalesParamsEntity = mapper.readValue(params, TotalSalesParamsEntity.class);
-        } catch (JsonProcessingException e) {
-            log.error(e.getMessage(), e);
-            throw new ValidationException(GameSalesConstants.PARAMS_MAPPING_ERROR_ENCOUNTERED_CONTACT_ADMIN);
-        }
-
-        if (ObjectUtils.anyNull(totalSalesParamsEntity, totalSalesParamsEntity.getFrom(), totalSalesParamsEntity.getTo())) {
-            String mandatoryParamsEmpty = "mandatory parameters 'from' or 'to' are empty";
-            log.error(mandatoryParamsEmpty);
-            throw new ValidationException(mandatoryParamsEmpty);
-        }
-        validateFromDateCannotBeAfterToDateNonMandatory(totalSalesParamsEntity.getFrom(), totalSalesParamsEntity.getTo());
-        validateCategoryAndGameNo(totalSalesParamsEntity.getCategory(), totalSalesParamsEntity.getGameNo());
-        return totalSalesParamsEntity;
-    }
-
 
     public Page<GameSalesView> getGameSalesPageWith(GameSalesParamsEntity gameSalesParamsEntity, String sortField, String sortDir, Pageable pageable) {
         if (StringUtils.isNotBlank(sortField)) {
@@ -304,47 +227,6 @@ public class GameSalesService {
     }
 
 
-    private void validateCategoryAndGameNo(String category, String gameNo) {
-        if (StringUtils.isBlank(category)) {
-            String categoryIsEmpty = "Category is empty";
-            log.error(categoryIsEmpty);
-            throw new ValidationException(categoryIsEmpty);
-        }
-
-        if (!StringUtils.containsAnyIgnoreCase(category, GameSalesConstants.CATEGORY_TOTAL_GAMES_COUNT, GameSalesConstants.CATEGORY_TOTAL_SALES)) {
-            String invalidCategory = MessageFormat.format("Invalid category \"{0}\". Category must be either \"{1}\" or \"{2}\"", category, GameSalesConstants.CATEGORY_TOTAL_GAMES_COUNT, GameSalesConstants.CATEGORY_TOTAL_SALES);
-            log.error(invalidCategory);
-            throw new ValidationException(invalidCategory);
-        }
-
-        if (StringUtils.isNotBlank(gameNo)) {
-            int gameNoInt = Integer.parseInt(gameNo);
-            if (gameNoInt < 0 || gameNoInt > 101) {
-                String invalidGameNo = "GameNo must be between 1 and 100";
-                log.error(invalidGameNo);
-                throw new ValidationException(invalidGameNo);
-            }
-        }
-    }
-
-    public void batchInsert(List<GameSalesView> views) {
-        String sql = "INSERT INTO game_sales (id, game_no, game_name, game_code, type, cost_price, tax, sale_price, date_of_sale) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
-        List<Object[]> batchArgs = views.stream()
-                .map(view -> new Object[]{
-                        view.getId(),
-                        view.getGameNo(),
-                        view.getGameName(),
-                        view.getGameCode(),
-                        view.getType(),
-                        view.getCostPrice(),
-                        view.getTax(),
-                        view.getSalePrice(),
-                        view.getDateOfSale()
-                })
-                .collect(Collectors.toList());
-        jdbcTemplate.batchUpdate(sql, batchArgs);
-    }
-
     public HashMap<String, Object> getTotalSalesWith(TotalSalesParamsEntity totalSalesParamsEntity) {
         HashMap<String, Object> response = new HashMap<>();
         if (totalSalesParamsEntity.getFrom() != null) {
@@ -373,85 +255,4 @@ public class GameSalesService {
         return response;
     }
 
-    public void validateFromDateCannotBeAfterToDateNonMandatory(LocalDateTime from, LocalDateTime to) {
-        if (ObjectUtils.allNotNull(from, to) && from.isAfter(to)) {
-            String fromDateIsAfterToDate = MessageFormat.format("From:{0} cannot be after To:{1}", from, to);
-            logAndThrowValidationException(fromDateIsAfterToDate);
-        }
-    }
-
-    public void validateMinPriceMaxPriceNonMandatory(Double minPrice, Double maxPrice) {
-        if ((minPrice != null && ComparableUtils.is(minPrice).lessThan(0.0))) {
-            String invalidMinPrice = MessageFormat.format("Invalid param minPrice:{0}, minPrice cannot be null or less than 0.0", minPrice);
-            logAndThrowValidationException(invalidMinPrice);
-        }
-        if ((maxPrice != null && ComparableUtils.is(maxPrice).lessThan(0.0))) {
-            String invalidMaxPrice = MessageFormat.format("Invalid param maxPrice:{0}, maxPrice cannot be null or less than 0.0", maxPrice);
-            logAndThrowValidationException(invalidMaxPrice);
-        }
-
-        if (ObjectUtils.allNotNull(minPrice, maxPrice) && ComparableUtils.is(minPrice).greaterThan(maxPrice)) {
-            String minPriceIsGreaterThanMaxPrice = MessageFormat.format("minPrice {0} cannot be greater than maxPrice {1}", minPrice, maxPrice);
-            logAndThrowValidationException(minPriceIsGreaterThanMaxPrice);
-        }
-    }
-
-    public void validateParamsNotEmpty(String params) {
-        if (StringUtils.isEmpty(params)) {
-            String paramsIsEmpty = "params is empty";
-            logAndThrowValidationException(paramsIsEmpty);
-        }
-    }
-
-    private void validateValidSortDirection(String sortDir) {
-        if (!StringUtils.equalsAnyIgnoreCase(sortDir, GameSalesConstants.SORT_DIR_ASC, GameSalesConstants.SORT_DIR_DESC)) {
-            String invalidSortDirection = MessageFormat.format("parameter sortDir:{0} is invalid. It should be either {1} or {2}", sortDir, GameSalesConstants.SORT_DIR_ASC, GameSalesConstants.SORT_DIR_DESC);
-            logAndThrowValidationException(invalidSortDirection);
-        }
-    }
-
-    private void validateValidSortFields(String sortField) {
-        String[] validColumnFieldsName = {"id", "game_no", "game_name", "game_code", "type", "cost_price", "tax", "sale_price", "date_of_sale"};
-        if (!GameSalesUtil.isStringInArrayIgnoreCase(sortField, validColumnFieldsName)) {
-            String invalidSortFields = MessageFormat.format("parameter sortField:{0} is not a valid field in game_sales table.", sortField);
-            logAndThrowValidationException(invalidSortFields);
-        }
-    }
-
-    private void logAndThrowValidationException(String errorMessage) {
-        log.error(errorMessage);
-        throw new ValidationException(errorMessage);
-    }
-
-    private void updateImportLog(ImportLogView view) {
-        ImportLogView viewToUpdate = importLogRepository.findById(view.getId()).orElseThrow(() -> {
-            String unableToFindRecordWithId = MessageFormat.format("Unable to find view with id {0}", view.getId());
-            return new ValidationException(unableToFindRecordWithId);
-        });
-        viewToUpdate.setTotalRecordsCount(view.getTotalRecordsCount());
-        if (StringUtils.isNotBlank(view.getStatus())) {
-            viewToUpdate.setStatus(view.getStatus());
-        }
-
-        if (view.getStartTime() != null) {
-            viewToUpdate.setStartTime(view.getStartTime());
-        }
-
-        if (view.getEndTime() != null) {
-            viewToUpdate.setEndTime(view.getEndTime());
-        }
-
-        if (view.getTotalProcessedRecordsCount() != null) {
-            viewToUpdate.setTotalProcessedRecordsCount(view.getTotalProcessedRecordsCount());
-        }
-
-        if (view.getInvalidRecordsCount() != null) {
-            viewToUpdate.setInvalidRecordsCount(view.getInvalidRecordsCount());
-        }
-
-        if (view.getTotalRecordsCount() != null) {
-            viewToUpdate.setTotalRecordsCount(view.getTotalRecordsCount());
-        }
-        importLogRepository.save(viewToUpdate);
-    }
 }

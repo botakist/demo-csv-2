@@ -11,17 +11,16 @@ import java.time.LocalDateTime;
 @Entity
 @Getter
 @Setter
-@Table(name = "game_sales",
-        indexes = {
-                @Index(columnList = "gameNo"),
-                @Index(columnList = "dateOfSale DESC"),
-                @Index(columnList = "dateOfSale DESC, salePrice"),
-                @Index(columnList = "dateOfSale DESC, gameNo, salePrice")
-        }
-)
+@Table(name = "game_sales"
+        , indexes = {
+        @Index(name = "idx_date_of_sale", columnList = "dateOfSale"),
+        @Index(name = "idx_date_of_sale_sale_price", columnList = "dateOfSale, salePrice"),
+        @Index(name = "idx_date_of_sale_sale_price_game_no", columnList = "dateOfSale, salePrice, gameNo")
+})
 public class GameSalesView {
     @Id
-    @GeneratedValue(strategy = GenerationType.SEQUENCE)
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "game_sales_seq")
+    @SequenceGenerator(name = "game_sales_seq", sequenceName = "game_sales_seq")
     private Long id;
     @Column(nullable = false)
     private int gameNo;

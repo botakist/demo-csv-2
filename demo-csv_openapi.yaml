@@ -1,0 +1,308 @@
+openapi: 3.0.3
+info:
+  title: Simple CSV uploader Spring Boot App
+  description: |-
+    This is a simple CSV ingestor Spring Boot
+    with a CSV file POST endpoint,
+    /getGameSales and /getTotalSales GET endpoint.
+    MySQL database must be run concurrently with the app for the endpoints to work.
+  version: 0.0.1
+servers:
+  - url: http://localhost:8080
+paths:
+  /import:
+    post:
+      summary: Import a CSV file
+      description: Endpoint to import a CSV file.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                csvFile:
+                  type: string
+                  format: binary
+                  description: The CSV file to upload
+      responses:
+        '200':
+          description: CSV file successfully imported
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "csv import success."
+        '400':
+          description: CSV Validation failure.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "params mapping error encountered, contact admin."
+        '500':
+          description: unexpected internal server error.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "unexpected internal server error. please contact admin."
+  /getGameSales:
+    get:
+      summary: get a list of game sales
+      description: get a list of game sales with various parameters
+      parameters:
+        - name: params
+          in: query
+          description: JSON schema containing filtering options
+          required: true
+          schema:
+            $ref: '#/components/schemas/GetGameSalesRequestParams'
+        - name: sortField
+          in: query
+          description: Field by which to sort the results
+          required: false
+          schema:
+            type: string
+            enum:
+              - "id"
+              - "cost_price"
+              - "date_of_sale"
+              - "game_code"
+              - "game_name"
+              - "game_no"
+              - "sale_price"
+              - "tax"
+              - "type"
+            example: "id"
+            default: "date_of_sale"
+        - name: sortDir
+          in: query
+          description: Direction to sort the results
+          required: false
+          schema:
+            type: string
+            enum:
+              - "asc"
+              - "desc"
+            example: "asc"
+        - name: page
+          in: query
+          description: Page number for pagination
+          required: false
+          schema:
+            type: integer
+            format: int32
+            example: 1
+            default: 1
+      responses:
+        '200':
+          description: Successful response with filtered and sorted items depending on parameters given.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/GameSaleRecord'
+        '400':
+          description: request validation failure.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "params mapping error encountered, contact admin."
+        '500':
+          description: unexpected internal server error.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "unexpected internal server error. please contact admin."
+  /getTotalSales:
+    get:
+      summary: get total sum of sales or games sold for a given period.
+      description: Get total sales or games count for a given period. optional parameter is "gameNo"
+      parameters:
+        - name: params
+          in: query
+          description: JSON string containing the query parameters
+          required: true
+          schema:
+            $ref: '#/components/schemas/TotalSalesParams'
+      responses:
+        '200':
+          description: Successful response with total sales data
+          content:
+            application/json:
+              schema:
+                type: object
+                oneOf:
+                  - $ref: '#/components/schemas/TotalSalesResponse'
+                  - $ref: '#/components/schemas/TotalGamesCountResponse'
+        '400':
+          description: request validation failure.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "params mapping error encountered, contact admin."
+        '500':
+          description: unexpected internal server error.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "unexpected internal server error. please contact admin."
+
+
+
+
+components:
+  schemas:
+    GetGameSalesRequestParams:
+      type: object
+      properties:
+        from:
+          type: string
+          format: date-time
+          example: 2024-04-01T00:00:00+08:00
+        to:
+          type: string
+          format: date-time
+          example: 2024-04-30T23:59:00+08:00
+        minPrice:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 100.0
+          example: 1.0
+        maxPrice:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 100.0
+          example: 100.0
+    GameSaleRecord:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 720844
+        gameNo:
+          type: integer
+          example: 15
+        gameName:
+          type: string
+          example: "vrysuurxoboqlkrdprpy"
+        gameCode:
+          type: string
+          example: "yzadq"
+        type:
+          type: integer
+          example: 2
+        costPrice:
+          type: number
+          format: double
+          example: 63.0
+        tax:
+          type: number
+          format: double
+          example: 0.09
+        salePrice:
+          type: number
+          format: double
+          example: 68.67
+        dateOfSale:
+          type: string
+          format: date-time
+          example: "2024-04-01T23:59:57+08:00"
+      required:
+        - id
+        - gameNo
+        - gameName
+        - gameCode
+        - type
+        - costPrice
+        - tax
+        - salePrice
+        - dateOfSale
+    TotalSalesParams:
+      type: object
+      properties:
+        category:
+          type: string
+          enum:
+            - "totalSales"
+            - "totalGamesCount"
+          example: "totalSales"
+        from:
+          description: From datetime in ISO8601 format.
+          type: string
+          format: date-time
+          example: "2024-04-01T00:00:00Z"
+        to:
+          description: To datetime in ISO8601 format.
+          type: string
+          format: date-time
+          example: "2024-04-04T00:00:00Z"
+        gameNo:
+          type: integer
+          minimum: 1
+          maximum: 100
+          example: 15
+      required:
+        - category
+        - from
+        - to
+    TotalSalesResponse:
+      type: object
+      properties:
+        from:
+          type: string
+          format: date-time
+          example: "2024-04-01T00:00:00"
+        totalSales:
+          type: number
+          format: double
+          example: 18972.540000000008
+        to:
+          type: string
+          format: date-time
+          example: "2024-04-02T00:00:00"
+        category:
+          type: string
+          enum:
+            - "totalSales"
+            - "totalGamesCount"
+          example: "totalSales"
+        gameNo:
+          type: string
+          example: "1"
+      required:
+        - from
+        - totalSales
+        - to
+        - category
+    TotalGamesCountResponse:
+      type: object
+      properties:
+        totalGamesCount:
+          type: integer
+          example: 33283
+        from:
+          type: string
+          format: date-time
+          example: "2024-04-01T00:00:00"
+        to:
+          type: string
+          format: date-time
+          example: "2024-04-02T00:00:00"
+        category:
+          type: string
+          example: "totalGamesCount"
+      required:
+        - totalGamesCount
+        - from
+        - to
+        - category
